@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import yfinance as yf
 
 from database import init_db, get_setting, set_setting
 from trader import PaperTrader
@@ -274,11 +275,26 @@ with tab_backtest:
     if run_bt:
         with st.spinner(f"Running simulation on {bt_symbol}..."):
             results = run_comprehensive_backtest(bt_symbol, str(start_date), str(end_date))
+            
+            # שליפת מחיר המניה העדכני בזמן אמת מ-yfinance
+            try:
+                ticker_info = yf.Ticker(bt_symbol)
+                current_price = ticker_info.fast_info['lastPrice']
+                price_display = f"${current_price:,.2f}"
+            except Exception:
+                current_price = results.get('current_price', None)
+                price_display = f"${current_price:,.2f}" if current_price else "N/A"
 
         if results:
             st.markdown(f"### Performance Summary: **{bt_symbol}**")
             
-            m1, m2, m3, m4, m5 = st.columns(5)
+            # 6 עמודות KPI - כולל מחיר המניה הנוכחי
+            m0, m1, m2, m3, m4, m5 = st.columns(6)
+            m0.metric(
+                "Current Price",
+                price_display,
+                help="The latest market price for the selected ticker symbol."
+            )
             m1.metric(
                 "Win Rate", 
                 f"{results['win_rate']}%", 
@@ -312,7 +328,6 @@ with tab_backtest:
                     st.markdown("#### **Strategy Criteria**")
                     st.caption("Hover over any item for parameter details:")
                     
-                    # Explanations dictionary for hover tooltips
                     CRITERIA_EXPLANATIONS = {
                         "Win Rate (>45%)": "Win Rate (>45%): Percentage of winning trades out of total closed positions. Ensures the strategy doesn't rely solely on rare outlier trades.",
                         "Risk/Reward (>= 1:1.5)": "Risk/Reward (>= 1:1.5): Ratio of average profit on winning trades vs average loss on losing trades. 1:1.5 ensures gains outweigh losses.",
