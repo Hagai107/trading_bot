@@ -1,7 +1,26 @@
+import os
 import sqlite3
+import requests
 import yfinance as yf
 import pandas as pd
 from database import get_setting
+
+def send_telegram_alert(message):
+    """שליחת התראת Push ישירות לטלגרם"""
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    
+    if token and chat_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except Exception as e:
+            print(f"⚠️ Failed to send Telegram notification: {e}")
 
 class PaperTrader:
     def __init__(self, db_path="portfolio.db"):
@@ -44,31 +63,30 @@ class PaperTrader:
             conn.close()
             return msg
 
-        # 2. מעבר על כל מניה ברשימה
+        # 2. מעבר וסריקה מפורטת לכל מניה
         trades_executed = 0
         for symbol in watchlist:
             print(f"\n🔍 Analyzing {symbol}...")
 
-            # האם המניה כבר מוחזקת בתיק?
+            # בדיקה אם המניה כבר מוחזקת בתיק
             if symbol in open_symbols:
                 print(f"   [SKIP] {symbol}: Already held in active portfolio.")
                 continue
 
-            # שליפת נתוני מחיר היסטוריים מ-yfinance
+            # שליפת נתונים מ-yfinance
             try:
                 df = yf.download(symbol, period="60d", interval="1d", progress=False)
                 if df.empty or len(df) < 20:
                     print(f"   [SKIP] {symbol}: Insufficient price history data.")
                     continue
 
-                # טיפול במבנה Dataframe במידה ומוחזר MultiIndex
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
 
                 close_prices = df['Close']
                 last_price = float(close_prices.iloc[-1])
                 
-                # חישוב אינדיקטורים: SMA20 ו-RSI 14
+                # חישוב אינדיקטורים: SMA20 ו-RSI(14)
                 sma20 = float(close_prices.rolling(window=20).mean().iloc[-1])
                 
                 delta = close_prices.diff()
@@ -77,9 +95,9 @@ class PaperTrader:
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-                print(f"   📈 Metrics -> Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI(14): {rsi:.1f}")
+                print(f"   📈 Metrics -> Price: ${last_price:.2f} \vert{} SMA20:${sma20:.2f} | RSI(14): {rsi:.1f}")
 
-                # בדיקת קריטריוני כניסה
+                # התניות סריקה מפורטות
                 if last_price < sma20:
                     print(f"   [SKIP] {symbol}: Price (${last_price:.2f}) below SMA20 (${sma20:.2f}). Trend is not bullish.")
                     continue
@@ -98,10 +116,10 @@ class PaperTrader:
                 allocation_amount = total_val * pos_size_pct
 
                 if cash < allocation_amount:
-                    print(f"   [SKIP] {symbol}: Insufficient available cash (${cash:.2f} < required ${allocation_amount:.2f}).")
+                    print(f"   [SKIP] {symbol}: Insufficient available cash (${cash:.2f} < required${allocation_amount:.2f}).")
                     continue
 
-                # אם כל התנאים התקיימו - ביצוע קנייה
+                # ביצוע קנייה
                 shares_to_buy = allocation_amount / last_price
                 stop_loss_pct = float(get_setting('stop_loss_pct', 3.0)) / 100.0
                 take_profit_pct = float(get_setting('take_profit_pct', 8.0)) / 100.0
@@ -129,6 +147,17 @@ class PaperTrader:
                 trades_executed += 1
 
                 print(f"   ✅ [BUY EXECUTED] {symbol}: Bought {shares_to_buy:.2f} shares at ${last_price:.2f}")
+
+                # שליחת התראה לטלגרם
+                alert_msg = (
+                    f"🚀 *BUY EXECUTED*\n"
+                    f"• *Symbol:* `{symbol}`\n"
+                    f"• *Price:* `${last_price:.2f}`\n"
+                    f"• *Shares:* `{shares_to_buy:.2f}`\n"
+                    f"• *Stop Loss:* `${stop_loss:.2f}`\n"
+                    f"• *Take Profit:* `${take_profit:.2f}`"
+                )
+                send_telegram_alert(alert_msg)
 
                 if current_positions_count >= max_positions:
                     print(f"\n⚠️ Reached maximum position limit ({max_positions}). Stopping scan.")
