@@ -95,7 +95,8 @@ class PaperTrader:
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-                print(f"   📈 Metrics -> Price: ${last_price:.2f} \vert{} SMA20:${sma20:.2f} | RSI(14): {rsi:.1f}")
+                alert_msg = f"🚀 *BUY EXECUTED*\n• *Symbol:* `{symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `{shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n• *Take Profit:* `${take_profit:.2f}`"
+                send_telegram_alert(alert_msg)
 
                 # התניות סריקה מפורטות
                 if last_price < sma20:
