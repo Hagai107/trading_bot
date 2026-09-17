@@ -73,8 +73,11 @@ class PaperTrader:
                 print(f"   [SKIP] {symbol}: Already held in active portfolio.")
                 continue
 
-            # שליפת נתונים מ-yfinance
             try:
+                # אתחול המשתנה בתחילת הסריקה למניעת שגיאת UnboundLocalError
+                shares_to_buy = 0.0
+
+                # שליפת נתונים מ-yfinance
                 df = yf.download(symbol, period="60d", interval="1d", progress=False)
                 if df.empty or len(df) < 20:
                     print(f"   [SKIP] {symbol}: Insufficient price history data.")
@@ -95,8 +98,7 @@ class PaperTrader:
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-                alert_msg = f"🚀 *BUY EXECUTED*\n• *Symbol:* `{symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `{shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n• *Take Profit:* `${take_profit:.2f}`"
-                send_telegram_alert(alert_msg)
+                print(f"   📈 Metrics -> Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI(14): {rsi:.1f}")
 
                 # התניות סריקה מפורטות
                 if last_price < sma20:
@@ -117,10 +119,10 @@ class PaperTrader:
                 allocation_amount = total_val * pos_size_pct
 
                 if cash < allocation_amount:
-                    print(f"   [SKIP] {symbol}: Insufficient available cash (${cash:.2f} < required${allocation_amount:.2f}).")
+                    print(f"   [SKIP] {symbol}: Insufficient available cash (${cash:.2f} < required ${allocation_amount:.2f}).")
                     continue
 
-                # ביצוע קנייה
+                # חישוב כמות המניות לקנייה
                 shares_to_buy = allocation_amount / last_price
                 stop_loss_pct = float(get_setting('stop_loss_pct', 3.0)) / 100.0
                 take_profit_pct = float(get_setting('take_profit_pct', 8.0)) / 100.0
@@ -150,14 +152,7 @@ class PaperTrader:
                 print(f"   ✅ [BUY EXECUTED] {symbol}: Bought {shares_to_buy:.2f} shares at ${last_price:.2f}")
 
                 # שליחת התראה לטלגרם
-                alert_msg = (
-                    f"🚀 *BUY EXECUTED*\n"
-                    f"• *Symbol:* `{symbol}`\n"
-                    f"• *Price:* `${last_price:.2f}`\n"
-                    f"• *Shares:* `{shares_to_buy:.2f}`\n"
-                    f"• *Stop Loss:* `${stop_loss:.2f}`\n"
-                    f"• *Take Profit:* `${take_profit:.2f}`"
-                )
+                alert_msg = f"🚀 *BUY EXECUTED*\n• *Symbol:* `{symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `{shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n• *Take Profit:* `${take_profit:.2f}`"
                 send_telegram_alert(alert_msg)
 
                 if current_positions_count >= max_positions:
