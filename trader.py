@@ -6,7 +6,6 @@ import pandas as pd
 from database import get_setting
 
 def send_telegram_alert(message):
-    """שליחת התראת Push ישירות לטלגרם"""
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
@@ -29,25 +28,20 @@ class PaperTrader:
     def get_portfolio_summary(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
         cash = float(get_setting('cash', 10000.0))
-        
         cursor.execute("SELECT symbol, shares, current_price FROM positions")
         positions = cursor.fetchall()
-        
         positions_value = sum(shares * current_price for _, shares, current_price in positions)
         total_value = cash + positions_value
-        
         conn.close()
         return total_value, cash, positions_value
 
     def run_daily_scan(self, watchlist):
-        print(f"\n🚀 Starting automated daily scan for watchlist: {watchlist}")
+        print(f"\n🚀 Starting daily execution for watchlist: {watchlist}")
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # 1. בדיקת מגבלת פוזיציות מקסימלית
         max_positions = int(get_setting('max_positions', 3))
         cursor.execute("SELECT COUNT(*) FROM positions")
         current_positions_count = cursor.fetchone()[0]
@@ -55,7 +49,7 @@ class PaperTrader:
         cursor.execute("SELECT symbol FROM positions")
         open_symbols = [row[0] for row in cursor.fetchall()]
 
-        print(f"📊 Current Active Positions ({current_positions_count}/{max_positions}): {open_symbols}")
+        print(f"📊 Active Positions ({current_positions_count}/{max_positions}): {open_symbols}")
 
         if current_positions_count >= max_positions:
             msg = f"⚠️ [SKIP ALL] Max concurrent positions limit ({max_positions}) reached."
@@ -63,24 +57,20 @@ class PaperTrader:
             conn.close()
             return msg
 
-        # 2. מעבר וסריקה מפורטת לכל מניה
         trades_executed = 0
         for symbol in watchlist:
             print(f"\n🔍 Analyzing {symbol}...")
 
-            # בדיקה אם המניה כבר מוחזקת בתיק
             if symbol in open_symbols:
-                print(f"   [SKIP] {symbol}: Already held in active portfolio.")
+                print(f"   [SKIP] {symbol}: Already held in portfolio.")
                 continue
 
             try:
-                # אתחול המשתנה בתחילת הסריקה למניעת שגיאת UnboundLocalError
                 shares_to_buy = 0.0
 
-                # שליפת נתונים מ-yfinance
                 df = yf.download(symbol, period="60d", interval="1d", progress=False)
                 if df.empty or len(df) < 20:
-                    print(f"   [SKIP] {symbol}: Insufficient price history data.")
+                    print(f"   [SKIP] {symbol}: Insufficient price data.")
                     continue
 
                 if isinstance(df.columns, pd.MultiIndex):
@@ -88,8 +78,6 @@ class PaperTrader:
 
                 close_prices = df['Close']
                 last_price = float(close_prices.iloc[-1])
-                
-                # חישוב אינדיקטורים: SMA20 ו-RSI(14)
                 sma20 = float(close_prices.rolling(window=20).mean().iloc[-1])
                 
                 delta = close_prices.diff()
@@ -98,31 +86,24 @@ class PaperTrader:
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-                print(f"   📈 Metrics -> Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI(14): {rsi:.1f}")
+                print(f"   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI: {rsi:.1f}")
 
-                # התניות סריקה מפורטות
                 if last_price < sma20:
-                    print(f"   [SKIP] {symbol}: Price (${last_price:.2f}) below SMA20 (${sma20:.2f}). Trend is not bullish.")
+                    print(f"   [SKIP] {symbol}: Below SMA20.")
                     continue
 
-                if rsi > 60:
-                    print(f"   [SKIP] {symbol}: RSI ({rsi:.1f}) is above 60 (Overbought / Not in entry zone).")
+                if rsi > 60 or rsi < 30:
+                    print(f"   [SKIP] {symbol}: RSI ({rsi:.1f}) outside 30-60 target zone.")
                     continue
 
-                if rsi < 30:
-                    print(f"   [SKIP] {symbol}: RSI ({rsi:.1f}) is below 30 (Downtrend momentum).")
-                    continue
-
-                # בדיקת מזומן זמין
                 total_val, cash, _ = self.get_portfolio_summary()
                 pos_size_pct = float(get_setting('pos_size_pct', 5)) / 100.0
                 allocation_amount = total_val * pos_size_pct
 
                 if cash < allocation_amount:
-                    print(f"   [SKIP] {symbol}: Insufficient available cash (${cash:.2f} < required ${allocation_amount:.2f}).")
+                    print(f"   [SKIP] {symbol}: Insufficient cash.")
                     continue
 
-                # חישוב כמות המניות לקנייה
                 shares_to_buy = allocation_amount / last_price
                 stop_loss_pct = float(get_setting('stop_loss_pct', 3.0)) / 100.0
                 take_profit_pct = float(get_setting('take_profit_pct', 8.0)) / 100.0
@@ -140,7 +121,6 @@ class PaperTrader:
                     VALUES (?, 'BUY', ?, ?, 0.0)
                 """, (symbol, shares_to_buy, last_price))
 
-                # עדכון יתרת המזומן
                 new_cash = cash - allocation_amount
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash', ?)", (str(new_cash),))
 
@@ -149,18 +129,17 @@ class PaperTrader:
                 current_positions_count += 1
                 trades_executed += 1
 
-                print(f"   ✅ [BUY EXECUTED] {symbol}: Bought {shares_to_buy:.2f} shares at ${last_price:.2f}")
+                print(f"   ✅ [BUY EXECUTED] {symbol} at ${last_price:.2f}")
 
-                # שליחת התראה לטלגרם
                 alert_msg = f"🚀 *BUY EXECUTED*\n• *Symbol:* `{symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `{shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n• *Take Profit:* `${take_profit:.2f}`"
                 send_telegram_alert(alert_msg)
 
                 if current_positions_count >= max_positions:
-                    print(f"\n⚠️ Reached maximum position limit ({max_positions}). Stopping scan.")
+                    print(f"\n⚠️ Reached max positions ({max_positions}). Stopping.")
                     break
 
             except Exception as e:
-                print(f"   ❌ [ERROR] Failed analyzing {symbol}: {e}")
+                print(f"   ❌ [ERROR] {symbol}: {e}")
 
         conn.close()
         summary_msg = f"Daily scan finished. Executed {trades_executed} new trade(s)."
