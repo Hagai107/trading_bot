@@ -2,3 +2,4 @@ pandas
 requests
 alpaca-py
 beautifulsoup4
+yfinance
