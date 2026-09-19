@@ -37,6 +37,89 @@ class PaperTrader:
     conn.close()
     return total_value, cash, positions_value
 
+  def check_and_close_positions(self):
+    """בדיקת פוזיציות קיימות ומכירה אוטומטית במידה והגיעו ל-Stop Loss או Take Profit"""
+    print('\n🛡️ Checking open positions for Stop Loss / Take Profit...')
+    conn = sqlite3.connect(self.db_path)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        'SELECT symbol, shares, entry_price, stop_loss, take_profit FROM'
+        ' positions'
+    )
+    positions = cursor.fetchall()
+
+    closed_count = 0
+    for symbol, shares, entry_price, stop_loss, take_profit in positions:
+      try:
+        ticker = yf.Ticker(symbol)
+        history = ticker.history(period='1d')
+        if history.empty:
+          continue
+
+        current_price = float(history['Close'].iloc[-1])
+
+        # עדכון מחיר נוכחי ב-DB
+        cursor.execute(
+            'UPDATE positions SET current_price = ? WHERE symbol = ?',
+            (current_price, symbol),
+        )
+
+        reason = None
+        if current_price <= stop_loss:
+          reason = '🛡️ STOP LOSS HIT'
+        elif current_price >= take_profit:
+          reason = '🎯 TAKE PROFIT HIT'
+
+        if reason:
+          sell_value = shares * current_price
+          pnl_cash = (current_price - entry_price) * shares
+          pnl_pct = ((current_price - entry_price) / entry_price) * 100.0
+
+          # 1. מחיקת הפוזיציה
+          cursor.execute(
+              'DELETE FROM positions WHERE symbol = ?', (symbol,)
+          )
+
+          # 2. תיעוד בהיסטוריית הטריידים
+          cursor.execute(
+              """
+                        INSERT INTO trades_history (symbol, action, shares, price, pnl)
+                        VALUES (?, 'SELL', ?, ?, ?)
+                    """,
+              (symbol, shares, current_price, pnl_cash),
+          )
+
+          # 3. עדכון מזומן פנוי
+          cash = float(get_setting('cash', 10000.0))
+          new_cash = cash + sell_value
+          cursor.execute(
+              "INSERT OR REPLACE INTO settings (key, value) VALUES ('cash', ?)",
+              (str(new_cash),),
+          )
+
+          conn.commit()
+          closed_count += 1
+
+          pnl_icon = '🟢' if pnl_cash >= 0 else '🔴'
+          print(
+              f'   💥 [SELL EXECUTED] {symbol} at ${current_price:.2f}'
+              f' ({reason})'
+          )
+
+          alert_msg = (
+              f'💥 *SELL EXECUTED* ({reason})\n• *Symbol:* `{symbol}`\n• *Exit'
+              f' Price:* `${current_price:.2f}`\n• *PnL:* `{pnl_icon}'
+              f' ${pnl_cash:+.2f} ({pnl_pct:+.2f}%)`'
+          )
+          send_telegram_alert(alert_msg)
+
+      except Exception as e:
+        print(f'   ❌ Error checking exit condition for {symbol}: {e}')
+
+    conn.close()
+    return closed_count
+
   def update_live_prices(self):
     """עדכון מחירי השוק העדכניים בלייב עבור הפוזיציות הפתוחות ב-DB"""
     conn = sqlite3.connect(self.db_path)
@@ -64,10 +147,8 @@ class PaperTrader:
     """שליחת דוח מצב התיק המלא בטלגרם"""
     print('\n📲 Generating and sending daily portfolio summary alert...')
 
-    # 1. עדכון מחירי השוק בלייב
     self.update_live_prices()
 
-    # 2. שליפת נתוני התיק מ-DB
     conn = sqlite3.connect(self.db_path)
     cursor = conn.cursor()
 
@@ -96,13 +177,12 @@ class PaperTrader:
       )
 
     total_value = cash + positions_value
-    initial_cash = 10000.0  # תקציב התחלתי להשוואה
+    initial_cash = 10000.0
     total_pnl_pct = ((total_value - initial_cash) / initial_cash) * 100.0
     total_pnl_icon = '📈' if total_pnl_pct >= 0 else '📉'
 
     conn.close()
 
-    # 3. ניסוח ההודעה לטלגרם
     msg = f'📊 *דוח מצב תיק יומי*\n\n'
     msg += (
         f'💰 *שווי תיק כולל:* `${total_value:,.2f}` ({total_pnl_icon}'
@@ -119,17 +199,20 @@ class PaperTrader:
     else:
       msg += 'ℹ️ *אין פוזיציות פתוחות כרגע בתיק.*'
 
-    # שליחה לטלגרם
     send_telegram_alert(msg)
     print('✅ Portfolio summary sent successfully via Telegram.')
 
   def run_daily_scan(self, watchlist):
+    # 1. בדיקה ומכירה אוטומטית של פוזיציות שהגיעו ל-SL/TP
+    self.check_and_close_positions()
+
+    # 2. סריקת קנייה
     print(f'\n🚀 Starting daily execution for watchlist: {watchlist}')
 
     conn = sqlite3.connect(self.db_path)
     cursor = conn.cursor()
 
-    max_positions = int(get_setting('max_positions', 3))
+    max_positions = int(get_setting('max_positions', 7))
     cursor.execute('SELECT COUNT(*) FROM positions')
     current_positions_count = cursor.fetchone()[0]
 
@@ -179,9 +262,10 @@ class PaperTrader:
         rs = gain / loss
         rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-       # שליחת התראה לטלגרם
-        alert_msg = f"🚀 *BUY EXECUTED*\n• *Symbol:* `{symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `{shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n• *Take Profit:* `${take_profit:.2f}`"
-        send_telegram_alert(alert_msg)
+        print(
+            f'   📈 Price: ${last_price:.2f} \vert{} SMA20:${sma20:.2f} | RSI:'
+            f' {rsi:.1f}'
+        )
 
         if last_price < sma20:
           print(f'   [SKIP] {symbol}: Below SMA20.')
