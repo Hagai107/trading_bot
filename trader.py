@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -143,7 +143,6 @@ class PaperTrader:
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
                 print(f'   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI: {rsi:.1f}')
-
                 # לוגיקה למסחר
                 if last_price < sma20:
                     print(f'   [SKIP] {symbol}: Below SMA20.')
@@ -175,6 +174,7 @@ class PaperTrader:
                     qty=qty,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.GTC,
+                    order_class=OrderClass.BRACKET,
                     take_profit=TakeProfitRequest(limit_price=take_profit_price),
                     stop_loss=StopLossRequest(stop_price=stop_loss_price)
                 )
