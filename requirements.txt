@@ -1,5 +1,4 @@
-yfinance
 pandas
-numpy
-streamlit
-plotly
+requests
+alpaca-py
+beautifulsoup4
