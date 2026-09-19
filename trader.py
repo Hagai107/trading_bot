@@ -59,7 +59,6 @@ class PaperTrader:
 
         current_price = float(history['Close'].iloc[-1])
 
-        # עדכון מחיר נוכחי ב-DB
         cursor.execute(
             'UPDATE positions SET current_price = ? WHERE symbol = ?',
             (current_price, symbol),
@@ -76,12 +75,7 @@ class PaperTrader:
           pnl_cash = (current_price - entry_price) * shares
           pnl_pct = ((current_price - entry_price) / entry_price) * 100.0
 
-          # 1. מחיקת הפוזיציה
-          cursor.execute(
-              'DELETE FROM positions WHERE symbol = ?', (symbol,)
-          )
-
-          # 2. תיעוד בהיסטוריית הטריידים
+          cursor.execute('DELETE FROM positions WHERE symbol = ?', (symbol,))
           cursor.execute(
               """
                         INSERT INTO trades_history (symbol, action, shares, price, pnl)
@@ -90,7 +84,6 @@ class PaperTrader:
               (symbol, shares, current_price, pnl_cash),
           )
 
-          # 3. עדכון מזומן פנוי
           cash = float(get_setting('cash', 10000.0))
           new_cash = cash + sell_value
           cursor.execute(
@@ -107,10 +100,12 @@ class PaperTrader:
               f' ({reason})'
           )
 
+          # מבנה בטוח למניעת שבירת שורות ע"י ה-Formatter
           alert_msg = (
-              f'💥 *SELL EXECUTED* ({reason})\n• *Symbol:* `{symbol}`\n• *Exit'
-              f' Price:* `${current_price:.2f}`\n• *PnL:* `{pnl_icon}'
-              f' ${pnl_cash:+.2f} ({pnl_pct:+.2f}%)`'
+              f"💥 *SELL EXECUTED* ({reason})\n"
+              f"• *Symbol:* `{symbol}`\n"
+              f"• *Exit Price:* `${current_price:.2f}`\n"
+              f"• *PnL:* `{pnl_icon} ${pnl_cash:+.2f} ({pnl_pct:+.2f}%)`"
           )
           send_telegram_alert(alert_msg)
 
@@ -263,7 +258,7 @@ class PaperTrader:
         rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
         print(
-            f'   📈 Price: ${last_price:.2f} \vert{} SMA20:${sma20:.2f} | RSI:'
+            f'   📈 Price: ${last_price:.2f} | SMA20:${sma20:.2f} | RSI:'
             f' {rsi:.1f}'
         )
 
@@ -328,11 +323,14 @@ class PaperTrader:
 
         print(f'   ✅ [BUY EXECUTED] {symbol} at ${last_price:.2f}')
 
+        # מבנה בטוח למניעת שבירת שורות ע"י ה-Formatter
         alert_msg = (
-            '🚀 *BUY EXECUTED*\n• *Symbol:* `'
-            f' {symbol}`\n• *Price:* `${last_price:.2f}`\n• *Shares:* `'
-            f' {shares_to_buy:.2f}`\n• *Stop Loss:* `${stop_loss:.2f}`\n•'
-            f' *Take Profit:* `${take_profit:.2f}`'
+            f"🚀 *BUY EXECUTED*\n"
+            f"• *Symbol:* `{symbol}`\n"
+            f"• *Price:* `${last_price:.2f}`\n"
+            f"• *Shares:* `{shares_to_buy:.2f}`\n"
+            f"• *Stop Loss:* `${stop_loss:.2f}`\n"
+            f"• *Take Profit:* `${take_profit:.2f}`"
         )
         send_telegram_alert(alert_msg)
 
