@@ -2,7 +2,7 @@ name: Daily Trading Bot
 
 on:
   schedule:
-    - cron: '30 16 * * 1-5' # ירוץ בימי שני-שישי ב-16:30 UTC
+    - cron: '30 14 * * 1-5' # ירוץ בימי שני-שישי ב-16:30 UTC
   workflow_dispatch:
 
 jobs:
