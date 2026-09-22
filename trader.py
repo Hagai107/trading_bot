@@ -4,8 +4,8 @@ import requests
 from datetime import datetime, timedelta
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -41,8 +41,58 @@ class PaperTrader:
         self.take_profit_pct = 0.08  # 8% רווח
         self.stop_loss_pct = 0.03    # 3% הפסד
 
+    def check_and_notify_closed_sales(self):
+        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-24 השעות האחרונות"""
+        print('\n🔍 Checking for executed sell orders in the last 24 hours...')
+        try:
+            # שליפת פקודות מכירה שנסגרו ביממה האחרונה
+            filter_params = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                side=OrderSide.SELL,
+                after=datetime.now() - timedelta(days=1)
+            )
+            closed_orders = self.trading_client.get_orders(filter_params)
+            
+            if not closed_orders:
+                print('ℹ️ No closed sell orders in the last 24 hours.')
+                return
+
+            for order in closed_orders:
+                # וודאות שהפקודה אכן התבצעה בפועל (Filled)
+                if str(order.status).lower() != 'filled':
+                    continue
+                
+                symbol = order.symbol
+                qty = float(order.qty) if order.qty else 0.0
+                filled_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
+                order_type = str(order.order_type).lower()
+                
+                # זיהוי סוג הסגירה: רווח (Limit) או הפסד (Stop/Stop Limit)
+                if 'limit' in order_type:
+                    type_str = "🎯 *TAKE PROFIT HIT (+8%)*"
+                elif 'stop' in order_type:
+                    type_str = "🛑 *STOP LOSS HIT (-3%)*"
+                else:
+                    type_str = "📉 *SELL EXECUTED*"
+
+                alert_msg = (
+                    f"{type_str}\n"
+                    f"• *Symbol:* `{symbol}`\n"
+                    f"• *Executed Price:* `${filled_price:.2f}`\n"
+                    f"• *Shares Sold:* `{qty}`\n"
+                    f"• *Order Type:* `{order_type.upper()}`"
+                )
+                send_telegram_alert(alert_msg)
+                print(f'   📲 Telegram alert sent for closed sale: {symbol}')
+
+        except Exception as e:
+            print(f'⚠️ Error checking closed sell orders: {e}')
+
     def send_portfolio_summary_alert(self):
-        """שליחת דוח מצב התיק מול שרתי אלפקה"""
+        """שליחת דוח מצב התיק מול שרתי אלפקה + התראות מכירה"""
+        # בדיקת מכירות שבוצעו ושליחת התראות ייעודיות
+        self.check_and_notify_closed_sales()
+
         print('\n📲 Generating portfolio summary from Alpaca...')
         
         try:
@@ -113,7 +163,7 @@ class PaperTrader:
                 continue
 
             try:
-                # משיכת נתונים היסטוריים מאלפקה (90 ימים אחורה כדי לקבל לפחות 60 נרות מסחר)
+                # משיכת נתונים היסטוריים מאלפקה
                 request_params = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     timeframe=TimeFrame.Day,
@@ -142,7 +192,8 @@ class PaperTrader:
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
 
-                print(f'   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI: {rsi:.1f}')
+                print(f'  📈 Price: ${last_price:.2f} | SMA20:${sma20:.2f} | RSI: {rsi:.1f}')
+
                 # לוגיקה למסחר
                 if last_price < sma20:
                     print(f'   [SKIP] {symbol}: Below SMA20.')
@@ -158,7 +209,7 @@ class PaperTrader:
                     print(f'   [SKIP] {symbol}: Insufficient buying power in Alpaca account.')
                     continue
 
-                # חישוב כמות המניות לקנייה (כמות עגולה כדי ש-Bracket יעבוד חלק)
+                # חישוב כמות המניות לקנייה
                 qty = int(position_budget // last_price)
                 if qty <= 0:
                     print(f'   [SKIP] {symbol}: Price too high for allocated budget.')
@@ -168,7 +219,7 @@ class PaperTrader:
                 stop_loss_price = round(last_price * (1 - self.stop_loss_pct), 2)
                 take_profit_price = round(last_price * (1 + self.take_profit_pct), 2)
 
-                # הרכבת ושליחת פקודת Bracket (Market + SL + TP) לאלפקה
+                # הרכבת ושליחת פקודת Bracket לאלפקה
                 order_data = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
