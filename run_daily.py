@@ -5,7 +5,7 @@ def main():
     print("=== Starting Daily Trading Bot ===")
     
     # 1. הפעלת הסורק ומציאת 10 המניות החמות של היום
-    hottest_stocks = update_hottest_watchlist(top_n=10)
+    hottest_stocks = update_hottest_watchlist(top_n=15)
     
     # 2. אתחול הטריידר של אלפקה
     trader = PaperTrader()
