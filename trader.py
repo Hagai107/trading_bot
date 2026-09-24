@@ -108,7 +108,8 @@ class PaperTrader:
                 qty = float(pos.qty)
                 entry_price = float(pos.avg_entry_price)
                 current_price = float(pos.current_price)
-                pnl_pct = float(pos.unrealized_intraday_plpc) * 100 if pos.unrealized_intraday_plpc else 0.0
+                pnl_pct = float(pos.unrealized_plpc) * 100 if pos.unrealized_plpc else 0.0
+
                 
                 pnl_icon = '🟢' if pnl_pct >= 0 else '🔴'
                 positions_details.append(
