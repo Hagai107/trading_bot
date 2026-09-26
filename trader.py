@@ -206,7 +206,8 @@ class PaperTrader:
                 atr_pct = (atr_14 / last_price) * 100
 
                 # תיקון שורת ההדפסה שגרמה לשגיאה
-                print(f'   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} \vert{} SMA50:${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
+                print(f'📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | SMA50: ${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
+
 
                 # הפעלת חוקי הסינון הטכני (Technical Filter)
                 if last_price < 10:
