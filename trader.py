@@ -39,7 +39,7 @@ class PaperTrader:
         
         # הגדרות אסטרטגיה (Momentum & Growth)
         self.max_positions = 15
-        self.take_profit_pct = 0.08  # 8% רווח (החזרתי ל-8% כמו שביקשת במקור, אפשר לשנות ל-6% אם תעדיף)
+        self.take_profit_pct = 0.08  # 8% רווח 
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
@@ -104,7 +104,7 @@ class PaperTrader:
                 qty = float(pos.qty)
                 entry_price = float(pos.avg_entry_price)
                 current_price = float(pos.current_price)
-                # תיקון: מציג את התשואה הכוללת ולא רק התשואה היומית
+                # שימוש ברווח הכולל במקום היומי
                 pnl_pct = float(pos.unrealized_plpc) * 100 if pos.unrealized_plpc else 0.0
                 
                 pnl_icon = '🟢' if pnl_pct >= 0 else '🔴'
@@ -205,7 +205,8 @@ class PaperTrader:
                 atr_14 = float(tr.rolling(window=14).mean().iloc[-1])
                 atr_pct = (atr_14 / last_price) * 100
 
-                print(f'   📈 Price: ${last_price:.2f} | SMA20:${sma20:.2f} \vert{} SMA50:${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
+                # תיקון שורת ההדפסה שגרמה לשגיאה
+                print(f'   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} \vert{} SMA50:${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
 
                 # הפעלת חוקי הסינון הטכני (Technical Filter)
                 if last_price < 10:
