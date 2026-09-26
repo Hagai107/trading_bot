@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import requests
+import yfinance as yf
 from datetime import datetime, timedelta
 
 from alpaca.trading.client import TradingClient
@@ -36,16 +37,15 @@ class PaperTrader:
         self.trading_client = TradingClient(self.api_key, self.api_secret, paper=True)
         self.data_client = StockHistoricalDataClient(self.api_key, self.api_secret)
         
-        # הגדרות אסטרטגיה
+        # הגדרות אסטרטגיה (Momentum & Growth)
         self.max_positions = 15
-        self.take_profit_pct = 0.06  # 6% רווח
+        self.take_profit_pct = 0.08  # 8% רווח (החזרתי ל-8% כמו שביקשת במקור, אפשר לשנות ל-6% אם תעדיף)
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
         """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-24 השעות האחרונות"""
         print('\n🔍 Checking for executed sell orders in the last 24 hours...')
         try:
-            # שליפת פקודות מכירה שנסגרו ביממה האחרונה
             filter_params = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
                 side=OrderSide.SELL,
@@ -58,7 +58,6 @@ class PaperTrader:
                 return
 
             for order in closed_orders:
-                # וודאות שהפקודה אכן התבצעה בפועל (Filled)
                 if str(order.status).lower() != 'filled':
                     continue
                 
@@ -67,11 +66,10 @@ class PaperTrader:
                 filled_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
                 order_type = str(order.order_type).lower()
                 
-                # זיהוי סוג הסגירה: רווח (Limit) או הפסד (Stop/Stop Limit)
                 if 'limit' in order_type:
-                    type_str = "🎯 *TAKE PROFIT HIT (+6%)*"
+                    type_str = f"🎯 *TAKE PROFIT HIT (+{int(self.take_profit_pct*100)}%)*"
                 elif 'stop' in order_type:
-                    type_str = "🛑 *STOP LOSS HIT (-3%)*"
+                    type_str = f"🛑 *STOP LOSS HIT (-{int(self.stop_loss_pct*100)}%)*"
                 else:
                     type_str = "📉 *SELL EXECUTED*"
 
@@ -90,9 +88,7 @@ class PaperTrader:
 
     def send_portfolio_summary_alert(self):
         """שליחת דוח מצב התיק מול שרתי אלפקה + התראות מכירה"""
-        # בדיקת מכירות שבוצעו ושליחת התראות ייעודיות
         self.check_and_notify_closed_sales()
-
         print('\n📲 Generating portfolio summary from Alpaca...')
         
         try:
@@ -108,8 +104,8 @@ class PaperTrader:
                 qty = float(pos.qty)
                 entry_price = float(pos.avg_entry_price)
                 current_price = float(pos.current_price)
+                # תיקון: מציג את התשואה הכוללת ולא רק התשואה היומית
                 pnl_pct = float(pos.unrealized_plpc) * 100 if pos.unrealized_plpc else 0.0
-
                 
                 pnl_icon = '🟢' if pnl_pct >= 0 else '🔴'
                 positions_details.append(
@@ -136,7 +132,6 @@ class PaperTrader:
     def run_daily_scan(self, watchlist):
         print(f'\n🚀 Starting daily execution for watchlist: {watchlist}')
 
-        # קבלת מצב החשבון והפוזיציות הפתוחות
         account = self.trading_client.get_account()
         open_positions = self.trading_client.get_all_positions()
         
@@ -152,8 +147,6 @@ class PaperTrader:
             return msg
 
         trades_executed = 0
-        
-        # חישוב תקציב קבוע לפוזיציה (תיק מחולק ל-15 מנות שוות)
         position_budget = total_equity / self.max_positions
 
         for symbol in watchlist:
@@ -164,7 +157,9 @@ class PaperTrader:
                 continue
 
             try:
-                # משיכת נתונים היסטוריים מאלפקה
+                # ---------------------------------------------------------
+                # שלב 1: ניתוח טכני (Alpaca Data)
+                # ---------------------------------------------------------
                 request_params = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     timeframe=TimeFrame.Day,
@@ -176,15 +171,23 @@ class PaperTrader:
                     print(f'   [SKIP] {symbol}: No price data returned from Alpaca.')
                     continue
 
-                # חילוץ הנתונים עבור המניה הספציפית
                 df = bars.df.xs(symbol, level=0)
-                if len(df) < 20:
-                    print(f'   [SKIP] {symbol}: Insufficient historical data.')
+                if len(df) < 55:
+                    print(f'   [SKIP] {symbol}: Insufficient historical data (Need 50+ days for MA50).')
                     continue
 
                 close_prices = df['close']
+                volumes = df['volume']
+                high_prices = df['high']
+                low_prices = df['low']
+
                 last_price = float(close_prices.iloc[-1])
+                last_vol = float(volumes.iloc[-1])
+
+                # חישובי ממוצעים טכניים
                 sma20 = float(close_prices.rolling(window=20).mean().iloc[-1])
+                sma50 = float(close_prices.rolling(window=50).mean().iloc[-1])
+                avg_vol_20 = float(volumes.rolling(window=20).mean().iloc[-1])
 
                 # חישוב RSI (14)
                 delta = close_prices.diff()
@@ -192,35 +195,91 @@ class PaperTrader:
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
+                
+                # חישוב ATR יומי
+                prev_close = close_prices.shift(1)
+                tr1 = high_prices - low_prices
+                tr2 = (high_prices - prev_close).abs()
+                tr3 = (low_prices - prev_close).abs()
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr_14 = float(tr.rolling(window=14).mean().iloc[-1])
+                atr_pct = (atr_14 / last_price) * 100
 
-                print(f'  📈 Price: ${last_price:.2f} | SMA20:${sma20:.2f} | RSI: {rsi:.1f}')
+                print(f'   📈 Price: ${last_price:.2f} | SMA20:${sma20:.2f} \vert{} SMA50:${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
 
-                # לוגיקה למסחר
-                if last_price < sma20:
-                    print(f'   [SKIP] {symbol}: Below SMA20.')
+                # הפעלת חוקי הסינון הטכני (Technical Filter)
+                if last_price < 10:
+                    print(f'   [SKIP] {symbol}: Price below $10.')
+                    continue
+
+                if avg_vol_20 < 1_000_000:
+                    print(f'   [SKIP] {symbol}: Average volume below 1M.')
+                    continue
+
+                if last_vol < (1.5 * avg_vol_20):
+                    print(f'   [SKIP] {symbol}: No volume breakout today (Vol: {last_vol:,.0f}).')
+                    continue
+
+                if not (last_price > sma20 and sma20 > sma50):
+                    print(f'   [SKIP] {symbol}: Not in a strong uptrend (Price > MA20 > MA50).')
+                    continue
+                    
+                if last_price > sma20 * 1.08:
+                    print(f'   [SKIP] {symbol}: Overextended (Price is more than 8% above MA20).')
+                    continue
+
+                if not (3 <= atr_pct <= 8):
+                    print(f'   [SKIP] {symbol}: ATR ({atr_pct:.1f}%) is outside the 3%-8% range.')
                     continue
 
                 if rsi > 60 or rsi < 30:
                     print(f'   [SKIP] {symbol}: RSI ({rsi:.1f}) outside 30-60 zone.')
                     continue
 
-                # בדיקת כוח קנייה באלפקה (Buying Power)
+                # ---------------------------------------------------------
+                # שלב 2: ניתוח פונדמנטלי ומניעת דוחות (Yahoo Finance)
+                # ---------------------------------------------------------
+                print(f'   🔬 {symbol}: Passed technicals, checking fundamentals...')
+                stock = yf.Ticker(symbol)
+                info = stock.info
+                
+                rev_growth = info.get('revenueGrowth')
+                eps_growth = info.get('earningsQuarterlyGrowth')
+                
+                if rev_growth is None or eps_growth is None:
+                    print(f'   [SKIP] {symbol}: Missing fundamental growth data on Yahoo Finance.')
+                    continue
+                    
+                if rev_growth < 0.10 or eps_growth < 0.15:
+                    print(f'   [SKIP] {symbol}: Growth too low (Rev: {(rev_growth*100):.1f}%, EPS: {(eps_growth*100):.1f}%).')
+                    continue
+
+                earnings_timestamp = info.get('earningsTimestamp')
+                if earnings_timestamp:
+                    earnings_date = datetime.fromtimestamp(earnings_timestamp).date()
+                    today_date = datetime.now().date()
+                    days_to_earnings = (earnings_date - today_date).days
+                    
+                    if 0 <= days_to_earnings <= 2:
+                        print(f'   [SKIP] {symbol}: Earnings report in {days_to_earnings} days ({earnings_date}). Too risky.')
+                        continue
+
+                # ---------------------------------------------------------
+                # שלב 3: ביצוע פעולה באלפקה (Execution)
+                # ---------------------------------------------------------
                 buying_power = float(self.trading_client.get_account().buying_power)
                 if buying_power < position_budget:
                     print(f'   [SKIP] {symbol}: Insufficient buying power in Alpaca account.')
                     continue
 
-                # חישוב כמות המניות לקנייה
                 qty = int(position_budget // last_price)
                 if qty <= 0:
                     print(f'   [SKIP] {symbol}: Price too high for allocated budget.')
                     continue
 
-                # חישוב שערים ל-Bracket Order
                 stop_loss_price = round(last_price * (1 - self.stop_loss_pct), 2)
                 take_profit_price = round(last_price * (1 + self.take_profit_pct), 2)
 
-                # הרכבת ושליחת פקודת Bracket לאלפקה
                 order_data = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
@@ -244,8 +303,8 @@ class PaperTrader:
                     f"• *Symbol:* `{symbol}`\n"
                     f"• *Price:* `~${last_price:.2f}`\n"
                     f"• *Shares:* `{qty}`\n"
-                    f"• *Stop Loss (-3%):* `${stop_loss_price:.2f}`\n"
-                    f"• *Take Profit (+8%):* `${take_profit_price:.2f}`"
+                    f"• *Stop Loss (-{int(self.stop_loss_pct*100)}%):* `${stop_loss_price:.2f}`\n"
+                    f"• *Take Profit (+{int(self.take_profit_pct*100)}%):* `${take_profit_price:.2f}`"
                 )
                 send_telegram_alert(alert_msg)
 
