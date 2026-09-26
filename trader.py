@@ -38,7 +38,7 @@ class PaperTrader:
         
         # הגדרות אסטרטגיה
         self.max_positions = 15
-        self.take_profit_pct = 0.06  # 8% רווח
+        self.take_profit_pct = 0.06  # 6% רווח
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
@@ -69,7 +69,7 @@ class PaperTrader:
                 
                 # זיהוי סוג הסגירה: רווח (Limit) או הפסד (Stop/Stop Limit)
                 if 'limit' in order_type:
-                    type_str = "🎯 *TAKE PROFIT HIT (+8%)*"
+                    type_str = "🎯 *TAKE PROFIT HIT (+6%)*"
                 elif 'stop' in order_type:
                     type_str = "🛑 *STOP LOSS HIT (-3%)*"
                 else:
