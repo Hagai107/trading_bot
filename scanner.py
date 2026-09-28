@@ -1,4 +1,5 @@
 import io
+import time
 import pandas as pd
 import requests
 import yfinance as yf
@@ -113,19 +114,42 @@ def get_combined_watchlist(momentum_n=15, insider_n=5):
     """שילוב 15 מניות מומנטום + 5 מניות בעלי עניין לרשימה של 20 מניות"""
     print('\n🔥 Starting dual-strategy market scan...')
 
-    # 1. מציאת 15 מניות מומנטום מתוך מאגר של ~1500 מניות
     candidate_pool = fetch_live_market_tickers()
-    momentum_tickers = []
+    momentum_series_list = []
 
     if candidate_pool:
+        # חלוקה למנות (Chunks) של 250 מניות למניעת Rate Limit
+        chunk_size = 250
+        chunks = [candidate_pool[i:i + chunk_size] for i in range(0, len(candidate_pool), chunk_size)]
+        
+        print(f'⚡ Analyzing momentum for {len(candidate_pool)} tickers in {len(chunks)} chunks...')
+
+        for idx, chunk in enumerate(chunks, 1):
+            try:
+                print(f'   📦 Processing Chunk {idx}/{len(chunks)} ({len(chunk)} tickers)...')
+                data = yf.download(chunk, period='5d', interval='1d', threads=True, progress=False)
+                
+                if 'Close' in data and not data['Close'].empty:
+                    close_prices = data['Close']
+                    if len(close_prices) >= 3:
+                        mom = ((close_prices.iloc[-1] - close_prices.iloc[-3]) / close_prices.iloc[-3]) * 100
+                        momentum_series_list.append(mom.dropna())
+                
+                # השהייה קלה למניעת חסימת IP מול Yahoo Finance
+                time.sleep(1.5)
+
+            except Exception as e:
+                print(f'   ⚠️ Error processing chunk {idx}: {e}')
+
+    momentum_tickers = []
+    if momentum_series_list:
         try:
-            print(f'⚡ Analyzing momentum for {len(candidate_pool)} market tickers...')
-            data = yf.download(candidate_pool, period='5d', interval='1d', threads=True, progress=False)
-            close_prices = data['Close']
-            momentum = ((close_prices.iloc[-1] - close_prices.iloc[-3]) / close_prices.iloc[-3]) * 100
-            momentum_tickers = momentum.dropna().sort_values(ascending=False).head(momentum_n).index.tolist()
+            full_momentum = pd.concat(momentum_series_list)
+            # הסרת כפילויות אם קיימות ומיון מהגבוה לנמוך
+            full_momentum = full_momentum[~full_momentum.index.duplicated(keep='first')]
+            momentum_tickers = full_momentum.sort_values(ascending=False).head(momentum_n).index.tolist()
         except Exception as e:
-            print(f'❌ Error during momentum analysis: {e}')
+            print(f'❌ Error combining momentum series: {e}')
 
     if not momentum_tickers:
         momentum_tickers = ['AAPL', 'NVDA', 'TSLA', 'AMD', 'AMZN', 'MSFT', 'GOOGL', 'META', 'PLTR', 'NFLX', 'INTC', 'QCOM', 'BAC', 'JPM', 'DIS'][:momentum_n]
