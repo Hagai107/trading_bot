@@ -218,7 +218,7 @@ class PaperTrader:
                     print(f'   [SKIP] {symbol}: Average volume below 1M.')
                     continue
 
-                if last_vol < (1.5 * avg_vol_20):
+                if last_vol < (1.1 * avg_vol_20):
                     print(f'   [SKIP] {symbol}: No volume breakout today (Vol: {last_vol:,.0f}).')
                     continue
 
