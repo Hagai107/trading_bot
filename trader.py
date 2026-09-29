@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest, GetOrdersRequest
@@ -43,21 +43,26 @@ class PaperTrader:
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
-        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-24 השעות האחרונות"""
-        print('\n🔍 Checking for executed sell orders in the last 24 hours...')
+        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-48 השעות האחרונות"""
+        print('\n🔍 Checking for executed sell orders in the last 48 hours...')
         try:
+            # שימוש באזור זמן UTC מפורש וחלון של 48 שעות למניעת פספוס
+            after_time = datetime.now(timezone.utc) - timedelta(days=2)
+            
             filter_params = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
                 side=OrderSide.SELL,
-                after=datetime.now() - timedelta(days=1)
+                after=after_time,
+                nested=True  # מציג פקודות בנות מתוך Bracket Orders
             )
             closed_orders = self.trading_client.get_orders(filter_params)
             
             if not closed_orders:
-                print('ℹ️ No closed sell orders in the last 24 hours.')
+                print('ℹ️ No closed sell orders in the last 48 hours.')
                 return
 
             for order in closed_orders:
+                # לוודא שהפקודה אכן בוצעה בפועל (Filled)
                 if str(order.status).lower() != 'filled':
                     continue
                 
@@ -67,9 +72,9 @@ class PaperTrader:
                 order_type = str(order.order_type).lower()
                 
                 if 'limit' in order_type:
-                    type_str = f"🎯 *TAKE PROFIT HIT (+{int(self.take_profit_pct*100)}%)*"
+                    type_str = "🎯 *TAKE PROFIT HIT (+8%)*"
                 elif 'stop' in order_type:
-                    type_str = f"🛑 *STOP LOSS HIT (-{int(self.stop_loss_pct*100)}%)*"
+                    type_str = "🛑 *STOP LOSS HIT (-3%)*"
                 else:
                     type_str = "📉 *SELL EXECUTED*"
 
