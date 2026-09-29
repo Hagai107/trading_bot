@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta, timezone
 
 from alpaca.trading.client import TradingClient
@@ -37,20 +36,19 @@ class PaperTrader:
         self.trading_client = TradingClient(self.api_key, self.api_secret, paper=True)
         self.data_client = StockHistoricalDataClient(self.api_key, self.api_secret)
         
-        # הגדרות אסטרטגיה (Momentum & Growth)
+        # הגדרות אסטרטגיה
         self.max_positions = 15
-        self.take_profit_pct = 0.08  # 8% רווח 
+        self.take_profit_pct = 0.08  # 8% רווח
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
-        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-3 הימים האחרונים"""
+        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-3 הימים האחרונים (כולל legs)"""
         print('\n🔍 Checking for executed sell orders...')
         try:
-            # שליפת 50 הפקודות הסגורות האחרונות מ-Alpaca ללא פילטרים קשיחים ב-API
             filter_params = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
                 nested=True,
-                limit=50
+                limit=100
             )
             closed_orders = self.trading_client.get_orders(filter_params)
             
@@ -58,18 +56,25 @@ class PaperTrader:
                 print('ℹ️ No closed orders returned from Alpaca.')
                 return
 
+            # איסוף הפקודות הראשיות ופתיחת כל פקודות הבן (legs) המוצמדות אליהן
+            all_orders = []
+            for order in closed_orders:
+                all_orders.append(order)
+                if hasattr(order, 'legs') and order.legs:
+                    all_orders.extend(order.legs)
+
             cutoff_time = datetime.now(timezone.utc) - timedelta(days=3)
             sales_notified = 0
 
-            for order in closed_orders:
-                # סינון בפייתון: רק פקודות מכירה (SELL) שבוצעו (FILLED)
+            for order in all_orders:
+                # סינון: רק פקודות מכירה (SELL) שבוצעו (FILLED)
                 if str(order.side).lower() != 'sell':
                     continue
                 if str(order.status).lower() != 'filled':
                     continue
                 
                 # בדיקת זמן ביצוע
-                filled_at = order.filled_at or order.updated_at
+                filled_at = getattr(order, 'filled_at', None) or getattr(order, 'updated_at', None)
                 if filled_at and filled_at < cutoff_time:
                     continue
 
@@ -105,6 +110,7 @@ class PaperTrader:
     def send_portfolio_summary_alert(self):
         """שליחת דוח מצב התיק מול שרתי אלפקה + התראות מכירה"""
         self.check_and_notify_closed_sales()
+
         print('\n📲 Generating portfolio summary from Alpaca...')
         
         try:
@@ -120,8 +126,7 @@ class PaperTrader:
                 qty = float(pos.qty)
                 entry_price = float(pos.avg_entry_price)
                 current_price = float(pos.current_price)
-                # שימוש ברווח הכולל במקום היומי
-                pnl_pct = float(pos.unrealized_plpc) * 100 if pos.unrealized_plpc else 0.0
+                pnl_pct = float(pos.unrealized_intraday_plpc) * 100 if pos.unrealized_intraday_plpc else 0.0
                 
                 pnl_icon = '🟢' if pnl_pct >= 0 else '🔴'
                 positions_details.append(
@@ -173,9 +178,6 @@ class PaperTrader:
                 continue
 
             try:
-                # ---------------------------------------------------------
-                # שלב 1: ניתוח טכני (Alpaca Data)
-                # ---------------------------------------------------------
                 request_params = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     timeframe=TimeFrame.Day,
@@ -188,103 +190,31 @@ class PaperTrader:
                     continue
 
                 df = bars.df.xs(symbol, level=0)
-                if len(df) < 55:
-                    print(f'   [SKIP] {symbol}: Insufficient historical data (Need 50+ days for MA50).')
+                if len(df) < 20:
+                    print(f'   [SKIP] {symbol}: Insufficient historical data.')
                     continue
 
                 close_prices = df['close']
-                volumes = df['volume']
-                high_prices = df['high']
-                low_prices = df['low']
-
                 last_price = float(close_prices.iloc[-1])
-                last_vol = float(volumes.iloc[-1])
-
-                # חישובי ממוצעים טכניים
                 sma20 = float(close_prices.rolling(window=20).mean().iloc[-1])
-                sma50 = float(close_prices.rolling(window=50).mean().iloc[-1])
-                avg_vol_20 = float(volumes.rolling(window=20).mean().iloc[-1])
 
-                # חישוב RSI (14)
                 delta = close_prices.diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
                 rs = gain / loss
                 rsi = float((100 - (100 / (1 + rs))).iloc[-1])
-                
-                # חישוב ATR יומי
-                prev_close = close_prices.shift(1)
-                tr1 = high_prices - low_prices
-                tr2 = (high_prices - prev_close).abs()
-                tr3 = (low_prices - prev_close).abs()
-                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                atr_14 = float(tr.rolling(window=14).mean().iloc[-1])
-                atr_pct = (atr_14 / last_price) * 100
 
-                # תיקון שורת ההדפסה שגרמה לשגיאה
-                print(f'📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | SMA50: ${sma50:.2f} | RSI: {rsi:.1f} | ATR: {atr_pct:.1f}%')
+                print(f'   📈 Price: ${last_price:.2f} | SMA20: ${sma20:.2f} | RSI: {rsi:.1f}')
 
-
-                # הפעלת חוקי הסינון הטכני (Technical Filter)
-                if last_price < 10:
-                    print(f'   [SKIP] {symbol}: Price below $10.')
-                    continue
-
-                if avg_vol_20 < 1_000_000:
-                    print(f'   [SKIP] {symbol}: Average volume below 1M.')
-                    continue
-
-                if last_vol < (1.1 * avg_vol_20):
-                    print(f'   [SKIP] {symbol}: No volume breakout today (Vol: {last_vol:,.0f}).')
-                    continue
-
-                if not (last_price > sma20 and sma20 > sma50):
-                    print(f'   [SKIP] {symbol}: Not in a strong uptrend (Price > MA20 > MA50).')
-                    continue
-                    
-                if last_price > sma20 * 1.08:
-                    print(f'   [SKIP] {symbol}: Overextended (Price is more than 8% above MA20).')
-                    continue
-
-                if not (3 <= atr_pct <= 8):
-                    print(f'   [SKIP] {symbol}: ATR ({atr_pct:.1f}%) is outside the 3%-8% range.')
+                # בדיקת תנאי כניסה: מחיר מעל SMA20 ו-RSI בטווח 30-60
+                if last_price < sma20:
+                    print(f'   [SKIP] {symbol}: Below SMA20.')
                     continue
 
                 if rsi > 60 or rsi < 30:
                     print(f'   [SKIP] {symbol}: RSI ({rsi:.1f}) outside 30-60 zone.')
                     continue
 
-                # ---------------------------------------------------------
-                # שלב 2: ניתוח פונדמנטלי ומניעת דוחות (Yahoo Finance)
-                # ---------------------------------------------------------
-                print(f'   🔬 {symbol}: Passed technicals, checking fundamentals...')
-                stock = yf.Ticker(symbol)
-                info = stock.info
-                
-                rev_growth = info.get('revenueGrowth')
-                eps_growth = info.get('earningsQuarterlyGrowth')
-                
-                if rev_growth is None or eps_growth is None:
-                    print(f'   [SKIP] {symbol}: Missing fundamental growth data on Yahoo Finance.')
-                    continue
-                    
-                if rev_growth < 0.10 or eps_growth < 0.15:
-                    print(f'   [SKIP] {symbol}: Growth too low (Rev: {(rev_growth*100):.1f}%, EPS: {(eps_growth*100):.1f}%).')
-                    continue
-
-                earnings_timestamp = info.get('earningsTimestamp')
-                if earnings_timestamp:
-                    earnings_date = datetime.fromtimestamp(earnings_timestamp).date()
-                    today_date = datetime.now().date()
-                    days_to_earnings = (earnings_date - today_date).days
-                    
-                    if 0 <= days_to_earnings <= 2:
-                        print(f'   [SKIP] {symbol}: Earnings report in {days_to_earnings} days ({earnings_date}). Too risky.')
-                        continue
-
-                # ---------------------------------------------------------
-                # שלב 3: ביצוע פעולה באלפקה (Execution)
-                # ---------------------------------------------------------
                 buying_power = float(self.trading_client.get_account().buying_power)
                 if buying_power < position_budget:
                     print(f'   [SKIP] {symbol}: Insufficient buying power in Alpaca account.')
@@ -321,8 +251,8 @@ class PaperTrader:
                     f"• *Symbol:* `{symbol}`\n"
                     f"• *Price:* `~${last_price:.2f}`\n"
                     f"• *Shares:* `{qty}`\n"
-                    f"• *Stop Loss (-{int(self.stop_loss_pct*100)}%):* `${stop_loss_price:.2f}`\n"
-                    f"• *Take Profit (+{int(self.take_profit_pct*100)}%):* `${take_profit_price:.2f}`"
+                    f"• *Stop Loss (-3%):* `${stop_loss_price:.2f}`\n"
+                    f"• *Take Profit (+8%):* `${take_profit_price:.2f}`"
                 )
                 send_telegram_alert(alert_msg)
 
