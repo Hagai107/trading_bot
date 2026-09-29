@@ -42,7 +42,7 @@ class PaperTrader:
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
-        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-3 הימים האחרונים (כולל legs)"""
+        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו (כולל legs מתוך Bracket Orders)"""
         print('\n🔍 Checking for executed sell orders...')
         try:
             filter_params = GetOrdersRequest(
@@ -56,6 +56,8 @@ class PaperTrader:
                 print('ℹ️ No closed orders returned from Alpaca.')
                 return
 
+            print(f'   📦 Retrieved {len(closed_orders)} closed orders from Alpaca.')
+
             # איסוף הפקודות הראשיות ופתיחת כל פקודות הבן (legs) המוצמדות אליהן
             all_orders = []
             for order in closed_orders:
@@ -63,14 +65,15 @@ class PaperTrader:
                 if hasattr(order, 'legs') and order.legs:
                     all_orders.extend(order.legs)
 
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=3)
             sales_notified = 0
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=7)
 
             for order in all_orders:
-                # סינון: רק פקודות מכירה (SELL) שבוצעו (FILLED)
-                if str(order.side).lower() != 'sell':
-                    continue
-                if str(order.status).lower() != 'filled':
+                side_str = str(getattr(order, 'side', '')).lower()
+                status_str = str(getattr(order, 'status', '')).lower()
+                
+                # בדיקה גמישה שמזהה גם OrderSide.SELL וגם OrderStatus.FILLED
+                if 'sell' not in side_str or 'filled' not in status_str:
                     continue
                 
                 # בדיקת זמן ביצוע
@@ -81,7 +84,7 @@ class PaperTrader:
                 symbol = order.symbol
                 qty = float(order.qty) if order.qty else 0.0
                 filled_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
-                order_type = str(order.order_type).lower()
+                order_type = str(getattr(order, 'order_type', '')).lower()
                 
                 if 'limit' in order_type:
                     type_str = "🎯 *TAKE PROFIT HIT (+8%)*"
@@ -102,7 +105,7 @@ class PaperTrader:
                 print(f'   📲 Telegram alert sent for closed sale: {symbol}')
 
             if sales_notified == 0:
-                print('ℹ️ No new filled sell orders in the last 3 days.')
+                print('ℹ️ No new filled sell orders match the filter in the last 7 days.')
 
         except Exception as e:
             print(f'⚠️ Error checking closed sell orders: {e}')
