@@ -43,29 +43,36 @@ class PaperTrader:
         self.stop_loss_pct = 0.03    # 3% הפסד
 
     def check_and_notify_closed_sales(self):
-        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-48 השעות האחרונות"""
-        print('\n🔍 Checking for executed sell orders in the last 48 hours...')
+        """בדיקה ושליחת התראות טלגרם על מכירות שבוצעו ב-3 הימים האחרונים"""
+        print('\n🔍 Checking for executed sell orders...')
         try:
-            # שימוש באזור זמן UTC מפורש וחלון של 48 שעות למניעת פספוס
-            after_time = datetime.now(timezone.utc) - timedelta(days=2)
-            
+            # שליפת 50 הפקודות הסגורות האחרונות מ-Alpaca ללא פילטרים קשיחים ב-API
             filter_params = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
-                side=OrderSide.SELL,
-                after=after_time,
-                nested=True  # מציג פקודות בנות מתוך Bracket Orders
+                nested=True,
+                limit=50
             )
             closed_orders = self.trading_client.get_orders(filter_params)
             
             if not closed_orders:
-                print('ℹ️ No closed sell orders in the last 48 hours.')
+                print('ℹ️ No closed orders returned from Alpaca.')
                 return
 
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=3)
+            sales_notified = 0
+
             for order in closed_orders:
-                # לוודא שהפקודה אכן בוצעה בפועל (Filled)
+                # סינון בפייתון: רק פקודות מכירה (SELL) שבוצעו (FILLED)
+                if str(order.side).lower() != 'sell':
+                    continue
                 if str(order.status).lower() != 'filled':
                     continue
                 
+                # בדיקת זמן ביצוע
+                filled_at = order.filled_at or order.updated_at
+                if filled_at and filled_at < cutoff_time:
+                    continue
+
                 symbol = order.symbol
                 qty = float(order.qty) if order.qty else 0.0
                 filled_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
@@ -86,7 +93,11 @@ class PaperTrader:
                     f"• *Order Type:* `{order_type.upper()}`"
                 )
                 send_telegram_alert(alert_msg)
+                sales_notified += 1
                 print(f'   📲 Telegram alert sent for closed sale: {symbol}')
+
+            if sales_notified == 0:
+                print('ℹ️ No new filled sell orders in the last 3 days.')
 
         except Exception as e:
             print(f'⚠️ Error checking closed sell orders: {e}')
