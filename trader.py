@@ -66,7 +66,7 @@ class PaperTrader:
                     all_orders.extend(order.legs)
 
             sales_notified = 0
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=2)  # בדיקה של 2 ימים אחורה 
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=1)  # בדיקה של 2 ימים אחורה 
 
             for order in all_orders:
                 side_str = str(getattr(order, 'side', '')).lower()
